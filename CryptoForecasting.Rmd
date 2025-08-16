@@ -202,12 +202,14 @@ if((status_code(response) == 200) &&
 Зауважте, 
 що час буде відповідати UTC+0. 
 
+ТРЕБА, ЩОБ ДО НАЙНОВІШОЇ ДАТИ В ТАБЛИЦЮ ЗАХОДИЛА ІНФОРМАЦІЯ ПО ВІДКРИТТЮ ЦІНИ, А ВСІ ІНШІ --- ПО ЗАКРИТТЮ
+
 ```{r, Чистка даних}
 
 json_data$result$list %>%
   as_tibble(.name_repair = ~ c("start", "open", "high", "low", "close",
                                "volume", "turnover")) %>%
-  select(time = start, price = close) %>%
+  select(time = start, price = open) %>%
   mutate(
     time = as.POSIXct(as.numeric(time) / 1000, 
                       origin = "1970-01-01", tz = "UTC"),
