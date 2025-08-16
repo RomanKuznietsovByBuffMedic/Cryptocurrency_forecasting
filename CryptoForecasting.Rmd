@@ -1,0 +1,258 @@
+---
+title: "Cryptocurrency forecasting"
+author: "Kuznietsov"
+date: "2025-08-15"
+output: 
+  html_document: 
+    code_folding: show
+    fig_width: 10
+    fig_height: 10
+    toc: yes
+    df_print: kable
+---
+
+```{r, Вибір категорії та криптовалюти}
+
+symbol <- "BTCUSDT"
+category <- "linear"
+
+```
+
+
+Будемо прогнозувати "**`r symbol`**" у категорії **`r category`**.
+
+
+
+# 1. Часові ряди
+
+Першим підходом до прогнозування цін на криптовалюту використаємо часові ряди — залежність ціни закриття від часу.
+Хоча на ціну впливають численні зовнішні фактори, ми їх не враховуватимемо, адже:
+
+-   це найпростіший базовий випадок;
+
+-   ціна сама по собі відображає дію інших факторів.
+
+Припустимо, що на коротких інтервалах поведінка ряду не змінюється та не виникає надзвичайних подій.
+Виникають два ключові питання:
+
+1.  за який часовий проміжок (час) брати дані?
+
+2.  який крок дискретизації (інтервал) обрати?
+
+Відповіді:
+
+1.  Для актуальності візьмемо час не більше місяця назад до зараз.
+
+2.  Маємо:
+
+|  Інтервал  |           Особливості           |
+|:----------:|:-------------------------------:|
+|    малий   | більше даних, але сильніший шум |
+|  великий   |   менше шуму, але й мало даних  |
+
+
+Оптимально знайти баланс. 
+Для якісної моделі вистачить не менше 100 спостережень:
+
+|    Час    |    Інтервал    | Кількість спостережень |
+|:---------:|:--------------:|:----------------------:|
+|  місяць   |    6 годин     |          120           |
+| тиждень   |   1,5 години   |          112           |
+|   день    |   12 хвилин    |          120           |
+
+**Повідомлення з майбутнього.**  
+Щоб не ускладнювати код, маємо:
+
+|    Час    |   Інтервал   | Кількість спостережень |
+|:---------:|:------------:|:----------------------:|
+|  місяць   |   4 години   |          180           |
+| тиждень   |   1 годину   |          168           |
+|   день    |   5 хвилин   |          288           |
+
+
+(Саме такі інтервали найближчі до базових з біржі. 
+Отримали не більше 300 спостережень, 
+що не критично вплине на рівень шуму.)
+
+
+```{r, Обираємо час та інтервал}
+
+# У хвилинах
+time <- 24 * 60
+interval <- 5
+
+# Функція для конвертації хвилин у людський формат
+convert_minutes <- function(mins) {
+  days <- mins %/% (24 * 60)
+  hours <- (mins %% (24 * 60)) %/% 60
+  minutes <- mins %% 60
+  
+  parts <- c()
+  if (days > 0) parts <- c(parts, paste0(days, " ", ifelse(days == 1, "день", "днів")))
+  if (hours > 0) parts <- c(parts, paste0(hours, " ", ifelse(hours == 1, "година", "годин")))
+  if (minutes > 0) parts <- c(parts, paste0(minutes, " ", ifelse(minutes == 1, "хвилина", "хвилин")))
+  
+  if (length(parts) == 0) return("0 хвилин")
+  paste("\"", parts, "\"", collapse = " ")
+}
+
+about_time_interval <- paste("від зараз до ",
+                             convert_minutes(time),
+                             "назад з інтервалом у ",
+                             convert_minutes(interval),
+                             ".")
+
+```
+
+
+
+Отже розпочнемо з найактуальнішого часу:
+`r about_time_interval`
+
+## 1.1 Отримання даних
+
+Будемо отримувати дані з "Bybit" [API](https://www.bybit.com/future-activity/en/developer) 
+для надійності та актуальності.
+
+### 1.1.1 Завантаження необхідних бібліотек
+
+```{r, Завантаження необхідних бібліотек, message = F}
+
+# check your number of logic cores
+num_cores <- 8
+
+# install "pacman" for install and load libs
+# pacman::p_install(libs), pacman::p_load(libs)
+if (!require("pacman"))
+  install.packages("pacman", Ncpus = num_cores)
+
+
+packages <- c(
+  # get data from API
+  "httr",
+  "jsonlite",
+  
+  # data manipulation
+  "dplyr",
+  # create tidy data
+  "tidyr",
+  
+  # nice print a table
+  "gt"
+  )
+
+pacman::p_load(
+  package = packages,
+  
+  character.only = T,
+  
+  # let's do it faster
+  Ncpus = num_cores
+)
+
+```
+
+### 1.1.2 Отримання сирих даних за допомогою API та перевірка успішності отримання
+
+Отримаємо дані 
+`r about_time_interval`
+
+```{r, Отримання сирих даних за допомогою API та перевірка успішності отримання, results='asis'}
+
+# Визначити часові межі в мілісекундах
+end_time <- as.numeric(Sys.time()) * 1000
+start_time <- end_time - time * 60 * 1000
+
+# Визначити максимум спостережень (бо в АПІ на зараз обмеження на 200)
+limit <- time / interval 
+
+# Формуємо URL запиту
+url <- paste0("https://api.bybit.com/v5/market/kline?",
+              "category=", category,
+              "&symbol=", symbol,
+              "&interval=", as.character(interval),
+              "&startTime=", floor(start_time), 
+              "&endTime=", floor(end_time),
+              "&limit=", as.character(limit))
+
+
+# Виконуємо GET запит
+response <- GET(url)
+json_data <- fromJSON(content(response, "text", encoding = "UTF-8"))
+
+# Перевірка на успішність отримання даних
+if((status_code(response) == 200) &&
+  (!is.null(json_data$retCode)) && 
+  (json_data$retCode == 0) &&
+  (!is.null(json_data$result$list)) &&
+  (length(json_data$result$list) > 0)) {
+  cat('<span style="color:green;">DATA RECEIVED SUCCESSFULLY</span>\n')
+} else {
+  cat('<span style="color:red;">DATA RETRIEVAL ERROR</span>\n')
+}
+
+```
+
+### 1.1.3 Чистка даних
+
+Ми отримали багато даних,
+але ми вибиремо час 
+(та ковертуємо її у формат POSIX) 
+та ціну. 
+Зауважте, 
+що час буде відповідати UTC+0. 
+
+```{r, Чистка даних}
+
+json_data$result$list %>%
+  as_tibble(.name_repair = ~ c("start", "open", "high", "low", "close",
+                               "volume", "turnover")) %>%
+  select(time = start, price = close) %>%
+  mutate(
+    time = as.POSIXct(as.numeric(time) / 1000, 
+                      origin = "1970-01-01", tz = "UTC"),
+    price = as.numeric(price)
+  ) %>%
+  arrange(time) -> data
+
+head(data) |>
+  gt() |>
+  tab_header(
+    title = "Початок таблиці"
+  ) |>
+  tab_style(
+    style = cell_text(align = "center"),
+    locations = cells_column_labels()
+  )
+
+tail(data) |>
+  gt() |>
+  tab_header(
+    title = "Кінець таблиці"
+  ) |>
+  tab_style(
+    style = cell_text(align = "center"),
+    locations = cells_column_labels()
+  )
+
+
+```
+
+
+### 1.1.4 Перевірка якості даних
+
+Мається на увазі, чи не має втрачених даних у значенннях (NA) і чи не має пропущених спостережень (щоб різниця в часі між сусідними спостерженнями дорівнювала інтервалу).
+
+
+```{r, Перевірка якості даних, results='asis'}
+
+if(all(nrow(data) == nrow(drop_na(data)),
+       all(diff(data$time) == interval),
+       nrow(data) == limit)){
+  cat('<span style="color:green;">THE DATA IS QUALITATIVE.</span>\n')
+} else {
+  cat('<span style="color:red;">THE DATA IS NOT OF HIGH QUALITY.</span>\n')
+}
+
+```
+
