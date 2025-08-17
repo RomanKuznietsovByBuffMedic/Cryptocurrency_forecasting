@@ -78,7 +78,7 @@ category <- "linear"
 ```{r, Обираємо час та інтервал}
 
 # У хвилинах
-time <- 24 * 60
+time <- (24 * 60) 
 interval <- 5
 
 # Функція для конвертації хвилин у людський формат
@@ -138,7 +138,12 @@ packages <- c(
   "tidyr",
   
   # nice print a table
-  "gt"
+  "gt",
+  
+  # analysis ts
+  "forecast" # auto.arima(ts)
+  # "caschrono",
+  # "astsa"
   )
 
 pacman::p_load(
@@ -247,13 +252,94 @@ tail(data) |>
 
 ```{r, Перевірка якості даних, results='asis'}
 
-if(all(nrow(data) == nrow(drop_na(data)),
-       all(diff(data$time) == interval),
-       nrow(data) == limit)){
+if(all(
+  
+  nrow(data) == nrow(drop_na(data)),
+  
+  unique(
+    as.numeric(
+      difftime(data$time[-1], 
+               data$time[-length(data$time)], 
+               units = "mins"))
+    ) == interval,
+  
+  nrow(data) == limit)){
   cat('<span style="color:green;">THE DATA IS QUALITATIVE.</span>\n')
 } else {
   cat('<span style="color:red;">THE DATA IS NOT OF HIGH QUALITY.</span>\n')
 }
 
+
 ```
 
+
+
+
+## 1.2 Підгонка часового ряду
+
+Створення допоміжних функцій
+
+```{r, Створення допоміжних функцій}
+
+my_plot <- function(ts, main = "original")
+{
+  par(mfrow = c(3, 1))
+  plot(ts, main = main)
+  
+  acf(ts, main = main)
+  pacf(ts, main = main)
+}
+
+check <- function(model)
+  list(auto = auto.arima(model), arma = auto.arima(model, d = 0))
+
+```
+
+
+### 1.2.1 EDA
+
+Сторимо часовий ряд та подивимось на його summary, графік та ACF, PACF
+
+```{r, Сторимо часовий ряд та подивимось на його графік та ACF, PACF}
+
+price <- ts(data$price, frequency = limit)
+
+summary(price)
+
+my_plot(price)
+
+```
+
+Як бачимо, 
+графік не схожий на стаціонарний за середнім та і ACF дуже повільно спадає.
+
+Побачимо, яку модель запропонує машина:
+
+```{r, Модель запропонована машиною}
+
+check(price)
+
+```
+
+Перевіремо IMA(1, 1) та AR(1)
+(як у другій лр через `sarima(price, 0, 1, 1)` та `sarima(price, 0, 0, 1)`)
+
+Продиференціювати та ще раз прогнати через `check` та `sarima`
+
+Обрати найпростішу модель, яка дає непогані результати
+
+```{r}
+
+my_plot(diff(price))
+check(diff(price))
+
+
+my_plot(rnorm(limit))
+
+```
+
+
+Проганяючи у себе декілька разів аналіз, початковий ряд дає модель то ARIMA(1, 1, 0) то ARIMA(0, 1, 1).
+Це явно не нормально, та і продиференційований графік виглядає як білий шум.
+Отже це або AR(1), або випадкове блукання ARIMA(0, 1, 0).
+Треба додатково дивитись не тільки на ACF, PACF та більш уважніше
